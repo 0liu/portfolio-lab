@@ -1,0 +1,54 @@
+[project]
+name = "portlab"
+version = "0.1.0"
+description = "Daily-rebalancing, long-short-capable, multi-signal portfolio construction lab on cross-asset ETFs."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ning Liu" }]
+keywords = ["portfolio-construction", "quantitative-finance", "backtesting", "etf"]
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<1.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+target-version = "py313"
+extend-exclude = ["scripts"]  # may be messy (promotion rule applies)
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",  # pycodestyle + pyflakes
+    "I",            # isort
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "C4",           # comprehensions
+    "SIM",          # simplify
+    "RUF",          # ruff-specific
+    "PT",           # pytest style
+    "TID",          # tidy imports (enables the banned-api table below)
+    "DTZ",          # bans naive datetimes (timestamps are UTC ns; tz-aware only)
+    "NPY",          # numpy-specific pitfalls
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"__future__.annotations".msg = "Project targets 3.13+ where modern annotation syntax is native; PEP 649 (3.14) supersedes PEP 563. Quote the rare genuine forward reference instead."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

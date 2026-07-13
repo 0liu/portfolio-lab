@@ -1,0 +1,12 @@
+# Keeps GitHub Actions versions current
+# Dependabot opens a PR when actions/checkout, astral-sh/setup-uv, etc. release new versions.
+#
+# Note: Dependabot bumps at the version depth it sees — a full-version pin
+# (v8.3.2) or SHA pin gets bumped to the next full version / SHA.
+#
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
