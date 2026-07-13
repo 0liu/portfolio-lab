@@ -12,7 +12,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
-dependencies = []
+dependencies = [
+    "pandas>=3.0.3",
+    "pyarrow>=25.0.0",
+]
+
+[project.optional-dependencies]
+# Only needed to re-pull data from Alpaca. Reading the committed cache is credential-free.
+refresh = [
+    "alpaca-py>=0.43.5",
+    "python-dotenv>=1.2.2",
+]
 
 [dependency-groups]
 dev = [
