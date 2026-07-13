@@ -186,6 +186,7 @@ def test_refresh_writes_loadable_cache(tmp_path, monkeypatch):
     for call in calls:
         assert call["start"] == START
         assert call["end"] <= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=15)
+        assert call["end"] == call["end"].normalize()  # complete UTC days only
         assert call["key"] == "k"
     pd.testing.assert_frame_equal(load_bars("XLK", tmp_path), make_bars())
     pd.testing.assert_frame_equal(load_bars("SPY", tmp_path), make_bars())

@@ -193,7 +193,9 @@ def refresh(
             f"set {_KEY_VAR} and {_SECRET_VAR} in the environment or a .env file"
         )
 
-    end = pd.Timestamp.now(tz="UTC") - _END_SAFETY
+    # Last complete UTC day: never cache a bar for a session still in
+    # progress, and midnight is always older than the SIP 15-minute rule.
+    end = (pd.Timestamp.now(tz="UTC") - _END_SAFETY).normalize()
     data_dir.mkdir(parents=True, exist_ok=True)
     for ticker in tickers:
         bars = _fetch_bars(
