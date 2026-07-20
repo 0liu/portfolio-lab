@@ -28,6 +28,7 @@ refresh = [
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.21",
+    "scikit-learn>=1.9.0",  # test-only oracle for the estimation layer
 ]
 
 [build-system]
