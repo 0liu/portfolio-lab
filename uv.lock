@@ -289,6 +289,7 @@ source = { editable = "." }
 dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "scipy" },
 ]
 
 [package.optional-dependencies]
@@ -310,6 +311,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "pyarrow", specifier = ">=25.0.0" },
     { name = "python-dotenv", marker = "extra == 'refresh'", specifier = ">=1.2.2" },
+    { name = "scipy", specifier = ">=1.18.0" },
 ]
 provides-extras = ["refresh"]
 
