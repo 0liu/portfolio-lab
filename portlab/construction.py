@@ -1,17 +1,11 @@
-"""Construction layer I: equal_weight, inverse_vol, ERC under one interface.
+"""Construction layer
 
-Design: one dispatch — optimize(name, mu, cov, w_prev, cfg) — so the engine
-never special-cases an optimizer. The interface deliberately over-supplies:
-simple optimizers ignore the inputs they don't need (all three here ignore
-mu and w_prev; cfg is consumed once the MVO family lands in C10). All three
-are long-only and fully invested: weights sum to 1.
-
-
-
---- old
-Portfolio construction: pluggable optimizers behind one interface.
+All the pluggable optimizers for portfolio construction are behind one interface.
 
     optimize(name, mu, cov, w_prev, cfg) -> weights (pd.Series)
+
+The interface deliberately over-supplies. Simple optimizers ignore mu and
+w_prev. The MVO family consumes everything.
 
 Long-only baselines:
 * equal_weight   -- 1/N
@@ -19,36 +13,42 @@ Long-only baselines:
 * erc            -- equal risk contribution (scipy SLSQP)
 
 Headliners (cvxpy):
-* mvo            -- long-only mean-variance: per-asset cap, fully
-                    invested, L1 turnover penalty
-                    lambda * ||w - w_prev||_1
+* mvo            -- long-only mean-variance: per-asset cap, fully invested,
+                    L1 turnover penalty lambda * ||w - w_prev||_1
 * mvo_ls         -- long-short mean-variance: |w_i| <= max_weight,
                     sum|w| <= gross_cap, net exposure in net_range,
                     same turnover penalty.
 
-Costs live inside the objective, not as an afterthought -- at daily
-rebalancing this is the difference between an optimizer that survives
-costs and one that doesn't (see the lambda-sweep exhibit).
+Equal_weight / inverse_vol / erc are long-only and fully invested.
+mvo is long-only with a position cap; mvo_ls is long-short with position, gross
+and net constraints. Both MVOs carry the L1 turnover penalty.
 
-Vol targeting is applied as a portfolio-level overlay after weight
-construction: scale gross exposure so trailing portfolio vol hits
-cfg.target_vol, cash as residual.
+The vol targeting is applied as a portfolio-level overlay after weight
+construction. It scales gross exposure so trailing portfolio vol hits
+cfg.vol_target_annual, cash as residual.
 
-Extensions (separate commits): hrp, black_litterman.
+Costs live inside the objective. See the lambda-sweep exhibit.
 """
 
 from collections.abc import Callable
 
+import cvxpy as cp
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
 from portlab.config import Config
 
+# Annualization convention (trading days per year) — a contract, not a knob.
+TRADING_DAYS = 252
+
 # Max allowed deviation of any ERC risk contribution from 1/n before the
 # solver result is rejected (module-internal solver contract, not a research
 # parameter).
 _ERC_TOL = 1e-6
+
+# Max allowed constraint violation accepted from the QP solver.
+_QP_TOL = 1e-6
 
 
 def _validate_inputs(
@@ -74,6 +74,15 @@ def _validate_inputs(
         if w_prev.isna().any():
             raise ValueError("NaN in w_prev")
     return matrix
+
+
+def turnover(weights: pd.Series, w_prev: pd.Series | None) -> float:
+    """One-way turnover sum |w - w_prev|; w_prev=None means starting from cash."""
+    if w_prev is None:
+        return float(weights.abs().sum())
+    if not weights.index.equals(w_prev.index):
+        raise ValueError("w_prev is not aligned with weights")
+    return float((weights - w_prev).abs().sum())
 
 
 def equal_weight(
@@ -160,7 +169,7 @@ def erc(
                 "jac": lambda w: np.ones(n),
             }
         ],
-        options={"maxiter": 1000, "ftol": 1e-16},
+        options={"maxiter": 1000, "ftol": 1e-12},
     )
     if not result.success:
         raise RuntimeError(f"ERC solver failed: {result.message}")
@@ -177,15 +186,138 @@ def erc(
     return pd.Series(weights, index=cov.index)
 
 
+def _solve_qp(
+    objective: cp.Maximize, constraints: list, variable: cp.Variable, label: str
+) -> np.ndarray:
+    """QP solver. Accept only a clean OPTIMAL status. Return raw solution."""
+    problem = cp.Problem(objective, constraints)
+    problem.solve(solver=cp.CLARABEL)
+    if problem.status != cp.OPTIMAL or variable.value is None:
+        raise RuntimeError(f"{label} solver status: {problem.status}")
+    return np.asarray(variable.value, dtype="float64")
+
+
+def _mvo_objective(
+    matrix: np.ndarray,
+    mu: pd.Series,
+    w_prev: pd.Series | None,
+    cfg: Config,
+    variable: cp.Variable,
+) -> cp.Maximize:
+    """mu'w - (gamma/2) w'Sigma w - lambda ||w - w_prev||_1.
+
+    psd_wrap skips cvxpy's PSD re-check: the estimation layer already
+    guarantees PSD up to float noise (tested), and re-checking can reject
+    eigenvalues at -1e-16.
+    """
+    ccfg = cfg.construction
+    prev = np.zeros(len(mu)) if w_prev is None else w_prev.to_numpy(dtype="float64")
+    ret = mu.to_numpy(dtype="float64") @ variable
+    risk = 0.5 * ccfg.risk_aversion * cp.quad_form(variable, cp.psd_wrap(matrix))
+    penalty = ccfg.turnover_lambda * cp.norm1(variable - prev)
+    return cp.Maximize(ret - risk - penalty)
+
+
+def mvo(
+    mu: pd.Series, cov: pd.DataFrame, w_prev: pd.Series | None, cfg: Config
+) -> pd.Series:
+    """Long-only mean-variance: fully invested, per-asset cap.
+
+    maximize mu'w - (gamma/2) w'Sigma w - lambda ||w - w_prev||_1
+    s.t. sum(w) = 1, 0 <= w_i <= position_cap.
+    With mu = 0 and lambda = 0 this is the capped minimum-variance portfolio.
+    """
+    matrix = _validate_inputs(mu, cov, w_prev)
+    ccfg = cfg.construction
+    n = len(matrix)
+    if n * ccfg.position_cap < 1.0 - 1e-12:
+        raise ValueError(
+            f"infeasible: {n} assets * cap {ccfg.position_cap} < 1 (fully invested)"
+        )
+    w = cp.Variable(n)
+    constraints = [w >= 0, w <= ccfg.position_cap, cp.sum(w) == 1]
+    raw = _solve_qp(_mvo_objective(matrix, mu, w_prev, cfg, w), constraints, w, "mvo")
+
+    if raw.min() < -_QP_TOL or raw.max() > ccfg.position_cap + _QP_TOL:
+        raise RuntimeError(f"mvo solution violates bounds by > {_QP_TOL:.0e}")
+    if abs(raw.sum() - 1.0) > _QP_TOL:
+        raise RuntimeError(f"mvo solution sum {raw.sum():.8f} != 1")
+    cleaned = np.clip(raw, 0.0, ccfg.position_cap)
+    cleaned[np.abs(cleaned) < 1e-10] = 0.0
+    cleaned = cleaned / cleaned.sum()
+    return pd.Series(cleaned, index=cov.index)
+
+
+def mvo_ls(
+    mu: pd.Series, cov: pd.DataFrame, w_prev: pd.Series | None, cfg: Config
+) -> pd.Series:
+    """Long-short mean-variance with position, gross and net constraints.
+
+    maximize mu'w - (gamma/2) w'Sigma w - lambda ||w - w_prev||_1
+    s.t. |w_i| <= position_cap, sum|w| <= gross_cap,
+         net_min <= sum(w) <= net_max.
+    Not fully invested by construction. The residual is cash.
+    """
+    matrix = _validate_inputs(mu, cov, w_prev)
+    ccfg = cfg.construction
+    n = len(matrix)
+    w = cp.Variable(n)
+    constraints = [
+        cp.abs(w) <= ccfg.position_cap,
+        cp.norm1(w) <= ccfg.gross_cap,
+        cp.sum(w) >= ccfg.net_min,
+        cp.sum(w) <= ccfg.net_max,
+    ]
+    raw = _solve_qp(
+        _mvo_objective(matrix, mu, w_prev, cfg, w), constraints, w, "mvo_ls"
+    )
+
+    if np.abs(raw).max() > ccfg.position_cap + _QP_TOL:
+        raise RuntimeError(f"mvo_ls position cap violated by > {_QP_TOL:.0e}")
+    if np.abs(raw).sum() > ccfg.gross_cap + _QP_TOL:
+        raise RuntimeError(f"mvo_ls gross cap violated by > {_QP_TOL:.0e}")
+    if not (ccfg.net_min - _QP_TOL <= raw.sum() <= ccfg.net_max + _QP_TOL):
+        raise RuntimeError(f"mvo_ls net exposure {raw.sum():.6f} outside band")
+    cleaned = raw.copy()
+    cleaned[np.abs(cleaned) < 1e-10] = 0.0
+    return pd.Series(cleaned, index=cov.index)
+
+
+def vol_target(weights: pd.Series, cov: pd.DataFrame, cfg: Config) -> pd.Series:
+    """Scale the book so predicted annualized vol hits the target.
+
+    scale = (target  / sqrt(252)) / sqrt(w'Sigma w), capped so that gross
+    exposure never exceeds cfg.construction.gross_cap.
+
+    A fully-invested long-only book stops summing to 1 after scaling: the
+    residual is cash (scale < 1) or financing (scale > 1), by design.
+    """
+    if not weights.index.equals(cov.index):
+        raise ValueError("weights are not aligned with cov")
+    w = weights.to_numpy(dtype="float64")
+    matrix = cov.to_numpy(dtype="float64")
+    predicted_daily = float(np.sqrt(w @ matrix @ w))
+    if predicted_daily <= 0.0:
+        raise ValueError("cannot vol-target a zero-risk book")
+    ccfg = cfg.construction
+    scale = (ccfg.vol_target_annual / np.sqrt(TRADING_DAYS)) / predicted_daily
+    gross = float(np.abs(w).sum())
+    scale = min(scale, ccfg.gross_cap / gross)
+    return weights * scale
+
+
 _OPTIMIZERS: dict[
     str, Callable[[pd.Series, pd.DataFrame, pd.Series | None, Config], pd.Series]
 ] = {
     "equal_weight": equal_weight,
     "inverse_vol": inverse_vol,
     "erc": erc,
+    "mvo": mvo,
+    "mvo_ls": mvo_ls,
 }
 
 OPTIMIZER_NAMES: tuple[str, ...] = tuple(sorted(_OPTIMIZERS))
+SIMPLE_NAMES: tuple[str, ...] = ("equal_weight", "erc", "inverse_vol")
 
 
 def optimize(

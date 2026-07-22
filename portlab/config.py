@@ -79,6 +79,65 @@ class EstimationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ConstructionConfig:
+    # Per-asset position cap: w_i <= cap (long-only MVO), |w_i| <= cap (MVO-LS).
+    position_cap: float = 0.25
+
+    # MVO-LS gross exposure cap: sum |w_i| <= gross_cap.
+    gross_cap: float = 2.0
+
+    # MVO-LS net exposure band: net_min <= sum w_i <= net_max.
+    net_min: float = -0.5
+    net_max: float = 1.0
+
+    # Risk aversion (gamma) in the MVO objective mu'w - (gamma/2) w'Sigma w.
+    # Sets position size: larger gamma -> smaller, more risk-averse positions.
+    # mu is only a directional proxy with no calibrated scale, so doubling mu
+    # and doubling gamma give the same weights, i.e., gamma alone fixes the size.
+    # Default ~100 reflects the daily units here (mu ~ 1e-2, Sigma ~ 1e-4); it
+    # would be O(1) only with annualized inputs.
+    risk_aversion: float = 100.0
+
+    # L1 turnover penalty lambda * ||w - w_prev||_1 inside both MVOs.
+    # Default = 0: the cost-unaware baseline.
+    turnover_lambda: float = 0.0
+
+    # Vol-targeting overlay: annualized portfolio volatility target.
+    vol_target_annual: float = 0.10
+
+    def __post_init__(self) -> None:
+        if self.position_cap <= 0:
+            raise ValueError(f"position_cap must be positive, got {self.position_cap}")
+        if self.gross_cap < self.position_cap:
+            raise ValueError(
+                f"gross_cap must be >= position_cap, "
+                f"got {self.gross_cap} < {self.position_cap}"
+            )
+        if self.net_min > self.net_max:
+            raise ValueError(
+                f"need net_min <= net_max, got {self.net_min}, {self.net_max}"
+            )
+        if self.net_max > self.gross_cap or self.net_min < -self.gross_cap:
+            raise ValueError(
+                f"net band [{self.net_min}, {self.net_max}] must lie within "
+                f"[-gross_cap, gross_cap] = [{-self.gross_cap}, {self.gross_cap}]"
+            )
+        if self.risk_aversion <= 0:
+            raise ValueError(
+                f"risk_aversion must be positive, got {self.risk_aversion}"
+            )
+        if self.turnover_lambda < 0:
+            raise ValueError(
+                f"turnover_lambda must be non-negative, got {self.turnover_lambda}"
+            )
+        if self.vol_target_annual <= 0:
+            raise ValueError(
+                f"vol_target_annual must be positive, got {self.vol_target_annual}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     signals: SignalConfig = field(default_factory=SignalConfig)
     estimation: EstimationConfig = field(default_factory=EstimationConfig)
+    construction: ConstructionConfig = field(default_factory=ConstructionConfig)
