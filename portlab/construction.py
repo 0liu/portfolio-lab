@@ -179,7 +179,8 @@ def erc(
     worst = float(np.abs(contributions - 1.0 / n).max())
     if worst > ERC_CONTRIBUTION_TOL:
         raise RuntimeError(
-            f"ERC contributions deviate from 1/n by {worst:.2e} (> {ERC_CONTRIBUTION_TOL:.0e})"
+            f"ERC contributions deviate from 1/n by {worst:.2e} "
+            f"(> {ERC_CONTRIBUTION_TOL:.0e})"
         )
     return pd.Series(weights, index=cov.index)
 
