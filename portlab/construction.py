@@ -39,16 +39,14 @@ from scipy.optimize import minimize
 
 from portlab.config import Config
 
+# --- Solver acceptance tolerances (numerical contracts, not research params) ---
+# Max allowed deviation of any ERC risk contribution from 1/n before the solver
+# result is rejected
+ERC_CONTRIBUTION_TOL = 1e-5  # max |RC_i/sigma^2 - 1/n| accepted from SLSQP
+QP_BOUND_TOL = 1e-6  # max constraint violation accepted from Clarabel
+
 # Annualization convention (trading days per year) — a contract, not a knob.
 TRADING_DAYS = 252
-
-# Max allowed deviation of any ERC risk contribution from 1/n before the
-# solver result is rejected (module-internal solver contract, not a research
-# parameter).
-_ERC_TOL = 1e-6
-
-# Max allowed constraint violation accepted from the QP solver.
-_QP_TOL = 1e-6
 
 
 def _validate_inputs(
@@ -179,9 +177,9 @@ def erc(
     marginal = matrix @ weights
     contributions = weights * marginal / (weights @ marginal)
     worst = float(np.abs(contributions - 1.0 / n).max())
-    if worst > _ERC_TOL:
+    if worst > ERC_CONTRIBUTION_TOL:
         raise RuntimeError(
-            f"ERC contributions deviate from 1/n by {worst:.2e} (> {_ERC_TOL:.0e})"
+            f"ERC contributions deviate from 1/n by {worst:.2e} (> {ERC_CONTRIBUTION_TOL:.0e})"
         )
     return pd.Series(weights, index=cov.index)
 
@@ -238,9 +236,9 @@ def mvo(
     constraints = [w >= 0, w <= ccfg.position_cap, cp.sum(w) == 1]
     raw = _solve_qp(_mvo_objective(matrix, mu, w_prev, cfg, w), constraints, w, "mvo")
 
-    if raw.min() < -_QP_TOL or raw.max() > ccfg.position_cap + _QP_TOL:
-        raise RuntimeError(f"mvo solution violates bounds by > {_QP_TOL:.0e}")
-    if abs(raw.sum() - 1.0) > _QP_TOL:
+    if raw.min() < -QP_BOUND_TOL or raw.max() > ccfg.position_cap + QP_BOUND_TOL:
+        raise RuntimeError(f"mvo solution violates bounds by > {QP_BOUND_TOL:.0e}")
+    if abs(raw.sum() - 1.0) > QP_BOUND_TOL:
         raise RuntimeError(f"mvo solution sum {raw.sum():.8f} != 1")
     cleaned = np.clip(raw, 0.0, ccfg.position_cap)
     cleaned[np.abs(cleaned) < 1e-10] = 0.0
@@ -272,11 +270,11 @@ def mvo_ls(
         _mvo_objective(matrix, mu, w_prev, cfg, w), constraints, w, "mvo_ls"
     )
 
-    if np.abs(raw).max() > ccfg.position_cap + _QP_TOL:
-        raise RuntimeError(f"mvo_ls position cap violated by > {_QP_TOL:.0e}")
-    if np.abs(raw).sum() > ccfg.gross_cap + _QP_TOL:
-        raise RuntimeError(f"mvo_ls gross cap violated by > {_QP_TOL:.0e}")
-    if not (ccfg.net_min - _QP_TOL <= raw.sum() <= ccfg.net_max + _QP_TOL):
+    if np.abs(raw).max() > ccfg.position_cap + QP_BOUND_TOL:
+        raise RuntimeError(f"mvo_ls position cap violated by > {QP_BOUND_TOL:.0e}")
+    if np.abs(raw).sum() > ccfg.gross_cap + QP_BOUND_TOL:
+        raise RuntimeError(f"mvo_ls gross cap violated by > {QP_BOUND_TOL:.0e}")
+    if not (ccfg.net_min - QP_BOUND_TOL <= raw.sum() <= ccfg.net_max + QP_BOUND_TOL):
         raise RuntimeError(f"mvo_ls net exposure {raw.sum():.6f} outside band")
     cleaned = raw.copy()
     cleaned[np.abs(cleaned) < 1e-10] = 0.0

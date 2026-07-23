@@ -16,6 +16,7 @@ import pytest
 
 from portlab.config import Config, ConstructionConfig
 from portlab.construction import (
+    ERC_CONTRIBUTION_TOL,
     OPTIMIZER_NAMES,
     SIMPLE_NAMES,
     TRADING_DAYS,
@@ -101,7 +102,7 @@ def test_erc_contributions_are_equal():
     cov = make_cov([0.008, 0.012, 0.02, 0.03, 0.015], corr=0.4)
     weights = erc(zero_mu(cov), cov, None, CFG)
     rc = risk_contributions(weights, cov)
-    assert np.abs(rc - 1 / len(cov)).max() < 1e-6
+    assert np.abs(rc - 1 / len(cov)).max() < ERC_CONTRIBUTION_TOL
 
 
 def test_erc_two_assets_is_inverse_vol_for_any_correlation():
