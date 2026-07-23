@@ -96,6 +96,7 @@ class EstimationConfig:
                 f"cov_estimator must be 'ewma' or 'lw_cc', got {self.cov_estimator!r}"
             )
 
+
 @dataclass(frozen=True, slots=True)
 class ConstructionConfig:
     # Per-asset position cap: w_i <= cap (long-only MVO), |w_i| <= cap (MVO-LS).
@@ -160,8 +161,9 @@ class EngineConfig:
     # "BME" monthly. Weekly/monthly reuse drives the cost-sensitivity study.
     rebalance_freq: str = "B"
 
-    # Apply the vol-targeting overlay to every optimizer target, before the
-    # no-trade band. Off by default: raw optimizer books are the baseline.
+    # Annualized portfolio volatility target. Vol-targeting overlay is applied
+    # to every optimizer target, before the no-trade band.
+    # Off by default: raw optimizer books are the baseline.
     vol_target: bool = False
 
     # Per-asset no-trade band. An asset only trades when the absolute difference
