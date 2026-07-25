@@ -13,7 +13,7 @@ from portlab.config import (
     EstimationConfig,
     SignalConfig,
 )
-from portlab.engine import _rebalance_dates, run_backtest
+from portlab.engine import _rebalance_dates, run_all_optimizers, run_backtest
 from portlab.estimation import ewma_cov
 
 
@@ -229,3 +229,27 @@ def test_lw_cc_estimator_smoke():
     )
     result = run_backtest(closes, "inverse_vol", cfg)
     assert np.isfinite(result.net_returns.to_numpy()).all()
+
+
+def test_run_all_optimizers_matches_individual_runs():
+    closes = make_closes()
+    cfg = small_cfg()
+    batch = run_all_optimizers(closes, cfg, names=("equal_weight", "erc"))
+    assert list(batch) == ["equal_weight", "erc"]  # insertion order preserved
+    for name in batch:
+        pd.testing.assert_series_equal(
+            batch[name].net_returns, run_backtest(closes, name, cfg).net_returns
+        )
+
+
+def test_run_all_optimizers_defaults_to_full_registry():
+    from portlab.construction import OPTIMIZER_NAMES
+
+    closes = make_closes(k=5)  # mvo cap feasibility
+    batch = run_all_optimizers(closes, small_cfg())
+    assert tuple(batch) == OPTIMIZER_NAMES
+
+
+def test_run_all_optimizers_empty_names_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        run_all_optimizers(make_closes(), small_cfg(), names=())

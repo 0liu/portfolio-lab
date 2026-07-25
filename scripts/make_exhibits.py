@@ -42,7 +42,7 @@ from portlab.attribution import (
 from portlab.config import Config
 from portlab.construction import OPTIMIZER_NAMES, TRADING_DAYS
 from portlab.data import load_universe_bars
-from portlab.engine import run_backtest
+from portlab.engine import run_all_optimizers, run_backtest
 from portlab.estimation import ewma_cov
 from portlab.preprocessing import close_panel, daily_returns
 from portlab.universe import UNIVERSE, optimized_tickers
@@ -71,7 +71,7 @@ def run_all(closes: pd.DataFrame, cfg: Config, tag: str) -> dict:
     results = {}
     for name in OPTIMIZER_NAMES:
         print(f"[{tag}] running {name} ...", flush=True)
-        results[name] = run_backtest(closes, name, cfg)
+        results.update(run_all_optimizers(closes, cfg, names=(name,)))
     return results
 
 

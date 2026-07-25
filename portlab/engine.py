@@ -29,6 +29,7 @@ band. Banding can therefore leave a long-only book slightly off sum-to-1 by
 design.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -180,3 +181,19 @@ def run_backtest(
         ),
         weights=pd.DataFrame(weight_rows, index=index, columns=tickers),
     )
+
+
+def run_all_optimizers(
+    closes: pd.DataFrame,
+    cfg: Config,
+    names: Sequence[str] = OPTIMIZER_NAMES,
+) -> dict[str, BacktestResult]:
+    """Walk the panel forward once per optimizer, sharing one config.
+
+    The batch orchestration layer over run_backtest: comparison tables,
+    exhibit scripts, and multi-optimizer analysis all consume this instead of
+    re-implementing the loop. Insertion order of `names` is preserved.
+    """
+    if not names:
+        raise ValueError("names must be non-empty")
+    return {name: run_backtest(closes, name, cfg) for name in names}
