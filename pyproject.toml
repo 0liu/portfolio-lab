@@ -25,6 +25,10 @@ refresh = [
     "alpaca-py>=0.43.5",
     "python-dotenv>=1.2.2",
 ]
+exhibits = [
+    "matplotlib>=3.11.1",
+    "tabulate>=0.10.0",
+]
 
 [dependency-groups]
 dev = [

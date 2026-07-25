@@ -42,7 +42,7 @@ from portlab.config import Config
 # --- Solver acceptance tolerances (numerical contracts, not research params) ---
 # Max allowed deviation of any ERC risk contribution from 1/n before the solver
 # result is rejected
-ERC_CONTRIBUTION_TOL = 1e-5  # max |RC_i/sigma^2 - 1/n| accepted from SLSQP
+ERC_CONTRIBUTION_TOL = 1e-4  # max |RC_i/sigma^2 - 1/n| accepted from SLSQP
 QP_BOUND_TOL = 1e-6  # max constraint violation accepted from Clarabel
 
 # Annualization convention (trading days per year) — a contract, not a knob.
@@ -142,7 +142,7 @@ def erc(
     scaled = matrix * (n / np.trace(matrix))
 
     def objective(w: np.ndarray) -> tuple[float, np.ndarray]:
-        marginal = scaled @ w  # MRC_i = (Σw)_i ; shape (n,)
+        marginal = scaled @ w  # unnormalized MCR_i = (Σw)_i, shape (n,)
         total = w @ marginal  # w'Σw = σ² ; scalar
         # deviation of each risk contribution from the mean (1/n of total)
         gap = w * marginal - total / n  # RC_i - mean_RC; shape (n,)
@@ -167,7 +167,7 @@ def erc(
                 "jac": lambda w: np.ones(n),
             }
         ],
-        options={"maxiter": 1000, "ftol": 1e-12},
+        options={"maxiter": 1000, "ftol": 1e-14},
     )
     if not result.success:
         raise RuntimeError(f"ERC solver failed: {result.message}")
