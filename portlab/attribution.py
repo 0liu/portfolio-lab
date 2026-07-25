@@ -45,6 +45,8 @@ STAT_NAMES: tuple[str, ...] = (
     "cagr",
     "ann_vol",
     "sharpe",
+    "sortino",
+    "calmar",
     "max_drawdown",
     "ann_turnover",
     "cost_drag",
@@ -82,12 +84,25 @@ def performance_stats(result: BacktestResult) -> pd.Series:
     sharpe = (
         float(net.mean()) / std * np.sqrt(TRADING_DAYS) if std > 1e-12 else float("nan")
     )
+    # Sortino uses the lower partial moment with a zero target:
+    # downside = sqrt(mean(min(r, 0)^2)); same zero-vol floor as Sharpe
+    downside = float(np.sqrt((np.minimum(net.to_numpy(), 0.0) ** 2).mean()))
+    sortino = (
+        float(net.mean()) / downside * np.sqrt(TRADING_DAYS)
+        if downside > 1e-12
+        else float("nan")
+    )
+    cagr = total_growth ** (1.0 / years) - 1.0
+    mdd = max_drawdown(net)
+    calmar = cagr / abs(mdd) if mdd < -1e-12 else float("nan")
     return pd.Series(
         {
-            "cagr": total_growth ** (1.0 / years) - 1.0,
+            "cagr": cagr,
             "ann_vol": std * np.sqrt(TRADING_DAYS),
             "sharpe": sharpe,
-            "max_drawdown": max_drawdown(net),
+            "sortino": sortino,
+            "calmar": calmar,
+            "max_drawdown": mdd,
             "ann_turnover": float(result.turnover.sum()) / years,
             "cost_drag": float(result.costs.sum()) / years,
         },
@@ -136,30 +151,68 @@ def pct_risk_contributions(weights: pd.Series, cov: pd.DataFrame) -> pd.Series:
 
 def sweep_lambda(
     closes: pd.DataFrame,
-    optimizer_name: str,
+    optimizer_names: Sequence[str],
     cfg: Config,
     lambdas: Sequence[float],
     freqs: Sequence[str],
 ) -> pd.DataFrame:
-    """Net-of-cost Sharpe for every (turnover_lambda, rebalance frequency).
+    """Full performance stats for every (optimizer, frequency, lambda).
 
-    Index = lambda, columns = frequency. Only the MVO family reads lambda;
-    sweeping a simple optimizer yields a flat line by construction.
+    Rows are a MultiIndex (optimizer, freq, turnover_lambda); columns are
+    STAT_NAMES — one sweep feeds every downstream exhibit (Sharpe curve,
+    turnover/cost mechanism) without re-running backtests. Only the MVO
+    family reads lambda; a simple optimizer's rows are flat by construction.
     """
-    if not lambdas or not freqs:
-        raise ValueError("lambdas and freqs must be non-empty")
-    columns: dict[str, dict[float, float]] = {}
-    for freq in freqs:
-        cells: dict[float, float] = {}
-        for lam in lambdas:
-            variant = replace(
-                cfg,
-                construction=replace(cfg.construction, turnover_lambda=lam),
-                engine=replace(cfg.engine, rebalance_freq=freq),
-            )
-            result = run_backtest(closes, optimizer_name, variant)
-            cells[lam] = float(performance_stats(result)["sharpe"])
-        columns[freq] = cells
-    table = pd.DataFrame(columns)
-    table.index.name = "turnover_lambda"
+    if not optimizer_names or not lambdas or not freqs:
+        raise ValueError("optimizer_names, lambdas and freqs must be non-empty")
+    rows: dict[tuple[str, str, float], pd.Series] = {}
+    for name in optimizer_names:
+        for freq in freqs:
+            for lam in lambdas:
+                variant = replace(
+                    cfg,
+                    construction=replace(cfg.construction, turnover_lambda=lam),
+                    engine=replace(cfg.engine, rebalance_freq=freq),
+                )
+                result = run_backtest(closes, name, variant)
+                rows[(name, freq, lam)] = performance_stats(result)
+    table = pd.DataFrame(rows).T
+    table.index.names = ["optimizer", "freq", "turnover_lambda"]
+    return table
+
+
+def efficient_frontier(
+    returns: pd.DataFrame, cfg: Config, gammas: Sequence[float]
+) -> pd.DataFrame:
+    """Ex-ante constrained efficient frontier from full-sample moments.
+
+    mu = historical mean daily return, Sigma = ML sample covariance; each
+    gamma solves the long-only capped MVO (lambda = 0) and reports the
+    annualized (vol, return) of the solution. This is an IN-SAMPLE reference
+    curve — it sees the whole sample and is not a tradable result; realized
+    optimizer points plotted against it visualize the estimation-error gap.
+    """
+    if not gammas:
+        raise ValueError("gammas must be non-empty")
+    from portlab.construction import mvo
+    from portlab.estimation import sample_cov
+
+    mu = returns.mean()
+    cov = sample_cov(returns)
+    rows = {}
+    for gamma in gammas:
+        variant = replace(
+            cfg,
+            construction=replace(
+                cfg.construction, risk_aversion=float(gamma), turnover_lambda=0.0
+            ),
+        )
+        weights = mvo(mu, cov, None, variant)
+        w = weights.to_numpy()
+        rows[float(gamma)] = {
+            "ann_vol": float(np.sqrt(w @ cov.to_numpy() @ w)) * np.sqrt(TRADING_DAYS),
+            "ann_ret": float(w @ mu.to_numpy()) * TRADING_DAYS,
+        }
+    table = pd.DataFrame(rows).T.sort_index(ascending=False)
+    table.index.name = "risk_aversion"
     return table

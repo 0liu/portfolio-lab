@@ -14,6 +14,7 @@ from portlab.attribution import (
     STAT_NAMES,
     comparison_table,
     component_risk_contributions,
+    efficient_frontier,
     equity_curve,
     marginal_risk_contributions,
     max_drawdown,
@@ -92,8 +93,20 @@ def test_performance_stats_hand_computed():
     expected_std = pd.Series(values).std(ddof=1)
     assert stats["ann_vol"] == pytest.approx(expected_std * np.sqrt(252), rel=1e-12)
     assert stats["sharpe"] == pytest.approx(0.0, abs=1e-12)
+    assert stats["sortino"] == pytest.approx(0.0, abs=1e-12)  # mean is zero
+    # calmar is self-consistently cagr / |max_drawdown|
+    assert stats["calmar"] == pytest.approx(stats["cagr"] / abs(stats["max_drawdown"]))
     assert stats["ann_turnover"] == pytest.approx(1.5)  # 1.5 over exactly 1 year
     assert stats["cost_drag"] == pytest.approx(1.5 * 5e-4)
+
+
+def test_sortino_hand_computed_asymmetric():
+    values = [0.02, -0.01] * 20
+    stats = performance_stats(_fake_result(series(values)))
+    mean = np.mean(values)
+    downside = np.sqrt(np.mean(np.minimum(values, 0.0) ** 2))
+    assert stats["sortino"] == pytest.approx(mean / downside * np.sqrt(252), rel=1e-12)
+    assert stats["sortino"] > stats["sharpe"]  # upside vol not penalized
 
 
 def _fake_result(net: pd.Series):
@@ -115,6 +128,8 @@ def _fake_result(net: pd.Series):
 def test_constant_returns_have_nan_sharpe():
     stats = performance_stats(_fake_result(series([0.001] * 10)))
     assert np.isnan(stats["sharpe"])
+    assert np.isnan(stats["sortino"])  # no downside observations at all
+    assert np.isnan(stats["calmar"])  # never under water
 
 
 def test_comparison_table_rows_match_stats():
@@ -188,23 +203,69 @@ def test_misaligned_weights_raise():
 def test_sweep_lambda_shape_and_flatness_for_simple_optimizer():
     closes = random_closes(n=90)
     table = sweep_lambda(
-        closes, "equal_weight", small_cfg(), lambdas=(0.0, 1e-3), freqs=("W-FRI",)
+        closes, ("equal_weight",), small_cfg(), lambdas=(0.0, 1e-3), freqs=("W-FRI",)
     )
-    assert table.shape == (2, 1)
-    assert table.index.name == "turnover_lambda"
-    # equal_weight ignores lambda: the column is exactly flat
-    assert table.iloc[0, 0] == table.iloc[1, 0]
-    assert np.isfinite(table.to_numpy()).all()
+    assert table.shape == (2, len(STAT_NAMES))
+    assert table.index.names == ["optimizer", "freq", "turnover_lambda"]
+    # equal_weight ignores lambda: the two rows are identical across all stats
+    pd.testing.assert_series_equal(table.iloc[0], table.iloc[1], check_names=False)
 
 
 def test_sweep_lambda_reads_lambda_for_mvo_ls():
     closes = random_closes(n=90)
     table = sweep_lambda(
-        closes, "mvo_ls", small_cfg(), lambdas=(0.0, 1e-2), freqs=("W-FRI",)
+        closes, ("mvo_ls",), small_cfg(), lambdas=(0.0, 1e-2), freqs=("W-FRI",)
     )
-    assert table.iloc[0, 0] != table.iloc[1, 0]  # lambda actually bites
+    sharpe = table["sharpe"]
+    assert sharpe.iloc[0] != sharpe.iloc[1]  # lambda actually bites
+    turnover = table["ann_turnover"]
+    assert turnover.iloc[1] < turnover.iloc[0]  # via lower turnover
+
+
+def test_sweep_lambda_covers_the_grid():
+    closes = random_closes(n=90)
+    table = sweep_lambda(
+        closes,
+        ("equal_weight", "mvo_ls"),
+        small_cfg(),
+        lambdas=(0.0, 1e-3),
+        freqs=("W-FRI",),
+    )
+    assert table.shape == (4, len(STAT_NAMES))
+    assert set(table.index.get_level_values("optimizer")) == {
+        "equal_weight",
+        "mvo_ls",
+    }
 
 
 def test_sweep_lambda_empty_grid_raises():
     with pytest.raises(ValueError, match="non-empty"):
-        sweep_lambda(random_closes(), "mvo_ls", small_cfg(), lambdas=(), freqs=("B",))
+        sweep_lambda(
+            random_closes(), ("mvo_ls",), small_cfg(), lambdas=(), freqs=("B",)
+        )
+
+
+# --------------------------------------------------------------- frontier
+
+
+def test_efficient_frontier_moves_up_and_right_as_gamma_falls():
+    closes = random_closes(n=110, k=5)
+    from portlab.preprocessing import daily_returns
+
+    returns = daily_returns(closes)
+    frontier = efficient_frontier(returns, Config(), gammas=(3000.0, 300.0, 30.0))
+    assert list(frontier.columns) == ["ann_vol", "ann_ret"]
+    assert np.isfinite(frontier.to_numpy()).all()
+    # index sorted descending gamma: vol and return non-decreasing down the rows
+    vols = frontier["ann_vol"].to_numpy()
+    rets = frontier["ann_ret"].to_numpy()
+    assert (np.diff(vols) >= -1e-12).all()
+    assert (np.diff(rets) >= -1e-12).all()
+
+
+def test_efficient_frontier_empty_gammas_raises():
+    closes = random_closes(n=60, k=5)
+    from portlab.preprocessing import daily_returns
+
+    with pytest.raises(ValueError, match="non-empty"):
+        efficient_frontier(daily_returns(closes), Config(), gammas=())
