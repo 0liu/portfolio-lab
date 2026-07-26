@@ -131,9 +131,9 @@ def erc(
     Solver failure or contributions off 1/n raise, because a silently wrong
     allocation is worse than a loud one.
 
-    Analytic special cases the tests pin: n=2 gives inverse-vol for any
-    correlation; a diagonal (or constant-correlation) Sigma gives inverse-vol;
-    identical assets give equal weights.
+    Analytic special cases: n=2 gives inverse-vol for any correlation; a
+    diagonal (or constant-correlation) Sigma gives inverse-vol; identical assets
+    give equal weights.
     """
     matrix = _validate_inputs(mu, cov, w_prev)
     n = len(matrix)
@@ -205,9 +205,8 @@ def _mvo_objective(
 ) -> cp.Maximize:
     """mu'w - (gamma/2) w'Sigma w - lambda ||w - w_prev||_1.
 
-    psd_wrap skips cvxpy's PSD re-check: the estimation layer already
-    guarantees PSD up to float noise (tested), and re-checking can reject
-    eigenvalues at -1e-16.
+    psd_wrap skips cvxpy's PSD re-check: the estimation layer already guarantees
+    PSD up to float noise, and re-checking can reject eigenvalues at -1e-16.
     """
     ccfg = cfg.construction
     prev = np.zeros(len(mu)) if w_prev is None else w_prev.to_numpy(dtype="float64")

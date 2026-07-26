@@ -18,8 +18,8 @@ Signal layer: Daily-updating time-series and cross-sectional signals
 - xsmom / st_rev are zero-mean relative channels, per-day cross-sectional.
 
 PIT (point-in-time) contract: Every signal value for trading day t uses prices
-through the t-1 only. The shifts are baked into each signal's definition (not
-deferred to downstream), guarded by the look-ahead tripwire tests.
+through the t-1 only. The shifts are baked into each signal's definition instead
+of being deferred to downstream.
 """
 
 import math
