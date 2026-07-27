@@ -21,7 +21,7 @@ Drift: between rebalances weights move with realized returns,
     w'_i = w_i (1 + r_i) / (1 + r_net),   r_net = w'r - cost.
 
 Cost is paid from cash, so it lowers NAV and enters the drift denominator,
-which is stricter than the fully-invested sketch in docs/methodology.md.
+derived in docs/methodology.md.
 
 No-trade band: each rebalance compares the (overlay-adjusted) target with
 the drifted book per asset and trades only the assets whose gap exceeds the
