@@ -18,7 +18,7 @@ Outputs into docs/exhibits/:
   lambda_sweep.png / lambda_sweep.csv  net Sharpe vs lambda (mvo, mvo_ls x freq)
   lambda_mechanism.png                 how lambda works: turnover and cost drag
   risk_contribution_bars.png           pct risk by asset class, final rebalance
-  erc_vs_ew_contributions.png          per-asset risk shares: ERC vs equal weight
+  erc_vs_ivp_contributions.png         per-asset risk shares: ERC vs inverse-vol
   frontier.png                         in-sample frontier vs realized points
 """
 
@@ -90,16 +90,19 @@ def spy_stats(spy_closes: pd.Series, start) -> tuple[pd.Series, pd.Series]:
     return returns, stats
 
 
-def write_tables(results: dict, out: Path, suffix: str) -> pd.DataFrame:
-    table = comparison_table(results)
+def write_tables(
+    results: dict, out: Path, suffix: str, benchmark: pd.Series | None = None
+) -> pd.DataFrame:
+    table = comparison_table(results, benchmark=benchmark)
     table.to_csv(out / f"comparison_table{suffix}.csv")
     (out / f"comparison_table{suffix}.md").write_text(table.round(4).to_markdown())
     print(table.round(4).to_string())
     return table
 
 
-def plot_equity(results: dict, spy_returns: pd.Series | None, out: Path,
-                fname: str, title: str) -> None:
+def plot_equity(
+    results: dict, spy_returns: pd.Series | None, out: Path, fname: str, title: str
+) -> None:
     plt = _plt()
     fig, ax = plt.subplots(figsize=(10, 6))
     for name, result in results.items():
@@ -137,11 +140,16 @@ def plot_risk_return(results: dict, spy: pd.Series, out: Path) -> None:
     for name, result in results.items():
         stats = performance_stats(result)
         ax.scatter(stats["ann_vol"], stats["cagr"], s=60, zorder=3)
-        ax.annotate(name, (stats["ann_vol"], stats["cagr"]),
-                    textcoords="offset points", xytext=(8, 4))
+        ax.annotate(
+            name,
+            (stats["ann_vol"], stats["cagr"]),
+            textcoords="offset points",
+            xytext=(8, 4),
+        )
     ax.scatter(spy["ann_vol"], spy["cagr"], s=80, color="black", marker="s", zorder=3)
-    ax.annotate("SPY", (spy["ann_vol"], spy["cagr"]),
-                textcoords="offset points", xytext=(8, 4))
+    ax.annotate(
+        "SPY", (spy["ann_vol"], spy["cagr"]), textcoords="offset points", xytext=(8, 4)
+    )
     ax.set_xlabel("realized annualized volatility")
     ax.set_ylabel("realized CAGR")
     ax.set_title("Risk vs return, net of costs (raw risk levels)")
@@ -154,8 +162,9 @@ def plot_risk_return(results: dict, spy: pd.Series, out: Path) -> None:
 def build_sweep(closes: pd.DataFrame, cfg: Config, out: Path, quick: bool) -> None:
     lambdas = QUICK_LAMBDA_GRID if quick else LAMBDA_GRID
     freqs = ("W-FRI",) if quick else ("B", "W-FRI")
-    print(f"[sweep] {SWEEP_OPTIMIZERS} x {freqs} x {len(lambdas)} lambdas ...",
-          flush=True)
+    print(
+        f"[sweep] {SWEEP_OPTIMIZERS} x {freqs} x {len(lambdas)} lambdas ...", flush=True
+    )
     table = sweep_lambda(closes, SWEEP_OPTIMIZERS, cfg, lambdas, freqs)
     table.to_csv(out / "lambda_sweep.csv")
     plt = _plt()
@@ -164,8 +173,12 @@ def build_sweep(closes: pd.DataFrame, cfg: Config, out: Path, quick: bool) -> No
         for name in SWEEP_OPTIMIZERS:
             for freq in freqs:
                 cell = table.xs((name, freq), level=("optimizer", "freq"))[column]
-                ax.plot(cell.index, cell.to_numpy(), marker="o",
-                        label=f"{name} {FREQ_LABEL.get(freq, freq)}")
+                ax.plot(
+                    cell.index,
+                    cell.to_numpy(),
+                    marker="o",
+                    label=f"{name} {FREQ_LABEL.get(freq, freq)}",
+                )
         ax.set_xscale("symlog", linthresh=1e-5)
         ax.grid(alpha=0.3)
 
@@ -188,14 +201,18 @@ def build_sweep(closes: pd.DataFrame, cfg: Config, out: Path, quick: bool) -> No
     axes[1].set_ylabel("annualized cost drag")
     axes[1].set_xlabel("lambda (symlog)")
     axes[1].legend(frameon=False)
-    fig.suptitle("How the penalty works: lambda compresses turnover, turnover sets cost")
+    fig.suptitle(
+        "How the penalty works: lambda compresses turnover, turnover sets cost"
+    )
     fig.tight_layout()
     fig.savefig(out / "lambda_mechanism.png", dpi=150)
     plt.close(fig)
     print(table["sharpe"].unstack("turnover_lambda").round(3).to_string())
 
 
-def _final_sigma(result, returns: pd.DataFrame, cfg: Config) -> tuple[pd.Series, pd.DataFrame]:
+def _final_sigma(
+    result, returns: pd.DataFrame, cfg: Config
+) -> tuple[pd.Series, pd.DataFrame]:
     day = result.turnover.index[-1]
     pos = returns.index.get_loc(day)
     sigma = ewma_cov(
@@ -229,7 +246,9 @@ def plot_risk_bars(results: dict, closes: pd.DataFrame, cfg: Config, out: Path) 
     plt.close(fig)
 
 
-def plot_erc_vs_ivp(results: dict, closes: pd.DataFrame, cfg: Config, out: Path) -> None:
+def plot_erc_vs_ivp(
+    results: dict, closes: pd.DataFrame, cfg: Config, out: Path
+) -> None:
     returns = daily_returns(closes)
     frame = {}
     for name in ("erc", "inverse_vol"):
@@ -252,23 +271,37 @@ def plot_erc_vs_ivp(results: dict, closes: pd.DataFrame, cfg: Config, out: Path)
     plt.close(fig)
 
 
-def plot_frontier(results: dict, closes: pd.DataFrame, cfg: Config,
-                  spy: pd.Series, out: Path) -> None:
+def plot_frontier(
+    results: dict, closes: pd.DataFrame, cfg: Config, spy: pd.Series, out: Path
+) -> None:
     returns = daily_returns(closes)
     frontier = efficient_frontier(returns, cfg, GAMMA_GRID)
     plt = _plt()
     fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(frontier["ann_vol"], frontier["ann_ret"], color="gray", linewidth=1.5,
-            label="in-sample capped MVO frontier\n(full-sample mu/Sigma, reference only)")
+    ax.plot(
+        frontier["ann_vol"],
+        frontier["ann_ret"],
+        color="gray",
+        linewidth=1.5,
+        label="in-sample capped MVO frontier\n(full-sample mu/Sigma, reference only)",
+    )
     for name, result in results.items():
         stats = performance_stats(result)
         realized_mean = float(result.net_returns.mean()) * TRADING_DAYS
         ax.scatter(stats["ann_vol"], realized_mean, s=60, zorder=3)
-        ax.annotate(name, (stats["ann_vol"], realized_mean),
-                    textcoords="offset points", xytext=(8, 4))
+        ax.annotate(
+            name,
+            (stats["ann_vol"], realized_mean),
+            textcoords="offset points",
+            xytext=(8, 4),
+        )
     ax.scatter(spy["ann_vol"], spy["ann_mean"], s=80, color="black", marker="s")
-    ax.annotate("SPY", (spy["ann_vol"], spy["ann_mean"]),
-                textcoords="offset points", xytext=(8, 4))
+    ax.annotate(
+        "SPY",
+        (spy["ann_vol"], spy["ann_mean"]),
+        textcoords="offset points",
+        xytext=(8, 4),
+    )
     ax.set_xlabel("annualized volatility")
     ax.set_ylabel("annualized arithmetic return")
     ax.set_title("Theory vs reality: realized points sit inside the in-sample frontier")
@@ -282,8 +315,9 @@ def plot_frontier(results: dict, closes: pd.DataFrame, cfg: Config,
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="docs/exhibits", type=Path)
-    parser.add_argument("--quick", action="store_true",
-                        help="small lambda grid, weekly sweep only")
+    parser.add_argument(
+        "--quick", action="store_true", help="small lambda grid, weekly sweep only"
+    )
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
 
@@ -297,9 +331,14 @@ def main(argv: list[str] | None = None) -> None:
     start = next(iter(raw.values())).net_returns.index[0]
     spy_returns, spy = spy_stats(spy_closes, start)
 
-    write_tables(raw, args.output, "")
-    plot_equity(raw, spy_returns, args.output, "equity_raw.png",
-                "Net-of-cost equity, raw risk levels")
+    write_tables(raw, args.output, "", benchmark=spy_returns)
+    plot_equity(
+        raw,
+        spy_returns,
+        args.output,
+        "equity_raw.png",
+        "Net-of-cost equity, raw risk levels",
+    )
     plot_underwater(raw, args.output)
     plot_risk_return(raw, spy, args.output)
     plot_risk_bars(raw, closes, cfg, args.output)
@@ -307,9 +346,14 @@ def main(argv: list[str] | None = None) -> None:
     plot_frontier(raw, closes, cfg, spy, args.output)
 
     vt = run_all(closes, cfg_vt, "vol-target")
-    write_tables(vt, args.output, "_voltarget")
-    plot_equity(vt, spy_returns, args.output, "equity_voltarget.png",
-                "Net-of-cost equity, every book vol-targeted to 10% annualized")
+    write_tables(vt, args.output, "_voltarget", benchmark=spy_returns)
+    plot_equity(
+        vt,
+        spy_returns,
+        args.output,
+        "equity_voltarget.png",
+        "Net-of-cost equity, every book vol-targeted to 10% annualized",
+    )
 
     build_sweep(closes, cfg, args.output, quick=args.quick)
     print(f"exhibits written to {args.output}/", flush=True)

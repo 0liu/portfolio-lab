@@ -17,6 +17,7 @@ from portlab.attribution import (
     efficient_frontier,
     equity_curve,
     marginal_risk_contributions,
+    market_beta,
     max_drawdown,
     pct_risk_contributions,
     performance_stats,
@@ -269,3 +270,60 @@ def test_efficient_frontier_empty_gammas_raises():
 
     with pytest.raises(ValueError, match="non-empty"):
         efficient_frontier(daily_returns(closes), Config(), gammas=())
+
+
+# ------------------------------------------------------------------- beta
+
+
+def test_beta_of_benchmark_against_itself_is_one():
+    bench = series([0.01, -0.02, 0.005, 0.013, -0.007])
+    assert market_beta(bench, bench) == pytest.approx(1.0, rel=1e-12)
+
+
+def test_beta_hand_computed_scaled_and_offset():
+    bench = series([0.01, -0.02, 0.005, 0.013, -0.007])
+    # exact linear relation r = 1.5 b + c -> beta is exactly 1.5
+    assert market_beta(bench * 1.5 + 0.002, bench) == pytest.approx(1.5, rel=1e-12)
+    # sign flips through the covariance
+    assert market_beta(-bench, bench) == pytest.approx(-1.0, rel=1e-12)
+
+
+def test_beta_of_market_neutral_book_is_zero():
+    rng = np.random.default_rng(4)
+    idx = pd.bdate_range("2016-01-04", periods=400, name="date")
+    bench = pd.Series(rng.normal(0.0005, 0.01, 400), index=idx)
+    # independent noise carries no market exposure
+    noise = pd.Series(rng.normal(0.0, 0.01, 400), index=idx)
+    assert market_beta(noise, bench) == pytest.approx(0.0, abs=0.15)
+
+
+def test_beta_uses_only_overlapping_dates():
+    bench = series([0.01, -0.02, 0.005, 0.013, -0.007])
+    partial = (bench * 2.0).iloc[1:4]  # shorter, still exactly 2x on overlap
+    assert market_beta(partial, bench) == pytest.approx(2.0, rel=1e-12)
+
+
+def test_beta_rejects_degenerate_inputs():
+    bench = series([0.01, -0.02, 0.005])
+    with pytest.raises(ValueError, match="at least 2 overlapping"):
+        market_beta(bench.iloc[:1], bench)
+    flat = pd.Series(0.001, index=bench.index)
+    with pytest.raises(ValueError, match="no variance"):
+        market_beta(bench, flat)
+
+
+def test_comparison_table_beta_column_is_opt_in():
+    closes = random_closes()
+    cfg = small_cfg()
+    results = {
+        name: run_backtest(closes, name, cfg) for name in ("equal_weight", "erc")
+    }
+    bench = results["equal_weight"].net_returns
+
+    plain = comparison_table(results)
+    assert list(plain.columns) == list(STAT_NAMES)  # benchmark-free by default
+
+    with_beta = comparison_table(results, benchmark=bench)
+    assert list(with_beta.columns) == [*STAT_NAMES, "beta"]
+    # a book benchmarked against itself has beta exactly one
+    assert with_beta.loc["equal_weight", "beta"] == pytest.approx(1.0, rel=1e-12)

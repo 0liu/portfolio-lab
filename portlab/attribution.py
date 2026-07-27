@@ -111,13 +111,44 @@ def performance_stats(result: BacktestResult) -> pd.Series:
     )
 
 
-def comparison_table(results: Mapping[str, BacktestResult]) -> pd.DataFrame:
-    """One row per optimizer, columns = STAT_NAMES, in the mapping's order."""
+def market_beta(returns: pd.Series, benchmark: pd.Series) -> float:
+    """Cov(r, r_b) / Var(r_b) on the overlapping dates.
+
+    How much of a book's return is market co-movement rather than
+    diversification: terminal wealth over a single equity bull decade ranks by
+    beta, not by optimizer quality, so beta is what makes raw equity curves
+    comparable-ish. Volatility is not a substitute — the same 10% vol can be
+    all market or none of it.
+    """
+    aligned = pd.concat([returns, benchmark], axis=1, join="inner").dropna()
+    if len(aligned) < 2:
+        raise ValueError("need at least 2 overlapping observations")
+    r = aligned.iloc[:, 0].to_numpy(dtype="float64")
+    b = aligned.iloc[:, 1].to_numpy(dtype="float64")
+    variance = float(b.var(ddof=1))
+    if variance <= 1e-24:
+        raise ValueError("benchmark has no variance")
+    return float(np.cov(r, b, ddof=1)[0, 1] / variance)
+
+
+def comparison_table(
+    results: Mapping[str, BacktestResult], benchmark: pd.Series | None = None
+) -> pd.DataFrame:
+    """One row per optimizer, columns = STAT_NAMES, in the mapping's order.
+
+    Supplying a benchmark return series appends a `beta` column; the core
+    statistics stay benchmark-free so the table is always computable.
+    """
     if not results:
         raise ValueError("no results given")
-    return pd.DataFrame(
+    table = pd.DataFrame(
         {name: performance_stats(result) for name, result in results.items()}
     ).T
+    if benchmark is not None:
+        table["beta"] = [
+            market_beta(result.net_returns, benchmark) for result in results.values()
+        ]
+    return table
 
 
 def _portfolio_sigma(weights: pd.Series, cov: pd.DataFrame) -> float:
