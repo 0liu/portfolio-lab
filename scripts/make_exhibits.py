@@ -11,15 +11,19 @@ The full run's daily mvo/mvo_ls sweep legs dominate the wall time.
 Outputs into docs/exhibits/:
   comparison_table.{md,csv}            raw risk levels
   comparison_table_voltarget.{md,csv}  vol-targeted to 10% annualized
-  equity_raw.png                       net equity, native risk levels
-  equity_voltarget.png                 net equity, common 10% vol target
-  underwater.png                       drawdown paths
-  risk_return_scatter.png              realized ann_vol x CAGR + SPY
-  lambda_sweep.png / lambda_sweep.csv  net Sharpe vs lambda (mvo, mvo_ls x freq)
-  lambda_mechanism.png                 how lambda works: turnover and cost drag
-  risk_contribution_bars.png           pct risk by asset class, final rebalance
-  erc_vs_ivp_contributions.png         per-asset risk shares: ERC vs inverse-vol
-  frontier.png                         in-sample frontier vs realized points
+  equity_raw.{png,csv}                 net equity, native risk levels
+  equity_voltarget.{png,csv}           net equity, common 10% vol target
+  underwater.{png,csv}                 drawdown paths
+  risk_return_scatter.{png,csv}        realized ann_vol x CAGR, with SPY
+  lambda_sweep.{png,csv}               net Sharpe vs lambda (mvo, mvo_ls x freq)
+  lambda_mechanism.png                 turnover and cost drag from the same sweep
+  risk_contribution_bars.{png,csv}     pct risk by asset class, final rebalance
+  erc_vs_ivp_contributions.{png,csv}   per-asset risk shares: ERC vs inverse-vol
+  frontier.{png,csv}                   in-sample frontier vs realized points
+  benchmark_stats.csv                  SPY buy-and-hold over the same window
+
+Every figure writes the numbers behind it alongside it, so nothing reported
+downstream has to be read off a chart.
 """
 
 import argparse
@@ -42,7 +46,7 @@ from portlab.attribution import (
 from portlab.config import Config
 from portlab.construction import OPTIMIZER_NAMES, TRADING_DAYS
 from portlab.data import load_universe_bars
-from portlab.engine import run_all_optimizers, run_backtest
+from portlab.engine import run_all_optimizers
 from portlab.estimation import ewma_cov
 from portlab.preprocessing import close_panel, daily_returns
 from portlab.universe import UNIVERSE, optimized_tickers
@@ -105,12 +109,16 @@ def plot_equity(
 ) -> None:
     plt = _plt()
     fig, ax = plt.subplots(figsize=(10, 6))
+    curves = {}
     for name, result in results.items():
-        equity_curve(result.net_returns).plot(ax=ax, label=name, linewidth=1.2)
+        curves[name] = equity_curve(result.net_returns)
+        curves[name].plot(ax=ax, label=name, linewidth=1.2)
     if spy_returns is not None:
-        equity_curve(spy_returns).plot(
+        curves["SPY"] = equity_curve(spy_returns)
+        curves["SPY"].plot(
             ax=ax, label="SPY (buy&hold)", color="black", linestyle="--", linewidth=1.0
         )
+    pd.DataFrame(curves).to_csv(out / f"{Path(fname).stem}.csv")
     ax.set_title(title)
     ax.set_ylabel("equity (1 unit of NAV)")
     ax.legend(frameon=False)
@@ -123,8 +131,11 @@ def plot_equity(
 def plot_underwater(results: dict, out: Path) -> None:
     plt = _plt()
     fig, ax = plt.subplots(figsize=(10, 5))
+    paths = {}
     for name, result in results.items():
-        drawdown(result.net_returns).plot(ax=ax, label=name, linewidth=1.1)
+        paths[name] = drawdown(result.net_returns)
+        paths[name].plot(ax=ax, label=name, linewidth=1.1)
+    pd.DataFrame(paths).to_csv(out / "underwater.csv")
     ax.set_title("Drawdown paths (net of costs, raw risk levels)")
     ax.set_ylabel("drawdown")
     ax.legend(frameon=False, loc="lower left")
@@ -137,8 +148,10 @@ def plot_underwater(results: dict, out: Path) -> None:
 def plot_risk_return(results: dict, spy: pd.Series, out: Path) -> None:
     plt = _plt()
     fig, ax = plt.subplots(figsize=(8, 6))
+    points = {}
     for name, result in results.items():
         stats = performance_stats(result)
+        points[name] = {"ann_vol": stats["ann_vol"], "cagr": stats["cagr"]}
         ax.scatter(stats["ann_vol"], stats["cagr"], s=60, zorder=3)
         ax.annotate(
             name,
@@ -150,6 +163,8 @@ def plot_risk_return(results: dict, spy: pd.Series, out: Path) -> None:
     ax.annotate(
         "SPY", (spy["ann_vol"], spy["cagr"]), textcoords="offset points", xytext=(8, 4)
     )
+    points["SPY"] = {"ann_vol": spy["ann_vol"], "cagr": spy["cagr"]}
+    pd.DataFrame(points).T.to_csv(out / "risk_return_scatter.csv")
     ax.set_xlabel("realized annualized volatility")
     ax.set_ylabel("realized CAGR")
     ax.set_title("Risk vs return, net of costs (raw risk levels)")
@@ -233,6 +248,7 @@ def plot_risk_bars(results: dict, closes: pd.DataFrame, cfg: Config, out: Path) 
         pct = pct_risk_contributions(weights, sigma)
         rows[name] = pct.groupby(pct.index.map(class_of)).sum()
     frame = pd.DataFrame(rows).fillna(0.0)
+    frame.to_csv(out / "risk_contribution_bars.csv")
 
     plt = _plt()
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -255,6 +271,10 @@ def plot_erc_vs_ivp(
         weights, sigma = _final_sigma(results[name], returns, cfg)
         frame[name] = pct_risk_contributions(weights, sigma)
     table = pd.DataFrame(frame)
+    dumped = table.assign(
+        equal_share=1.0 / len(table), gap=table["inverse_vol"] - table["erc"]
+    )
+    dumped.to_csv(out / "erc_vs_ivp_contributions.csv")
 
     plt = _plt()
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -276,6 +296,27 @@ def plot_frontier(
 ) -> None:
     returns = daily_returns(closes)
     frontier = efficient_frontier(returns, cfg, GAMMA_GRID)
+    frontier.to_csv(out / "frontier.csv")
+
+    # realized points against the curve: shortfall is the vertical distance at
+    # the book's own volatility, NaN where that volatility is off the curve
+    # (a leveraged book can exceed anything the capped long-only frontier reaches)
+    curve = frontier.sort_values("ann_vol")
+    vols, rets = curve["ann_vol"].to_numpy(), curve["ann_ret"].to_numpy()
+    points = {}
+    for name, result in results.items():
+        realized_vol = float(performance_stats(result)["ann_vol"])
+        realized_ret = float(result.net_returns.mean()) * TRADING_DAYS
+        inside = vols.min() <= realized_vol <= vols.max()
+        offered = float(np.interp(realized_vol, vols, rets)) if inside else np.nan
+        points[name] = {
+            "realized_vol": realized_vol,
+            "realized_ret": realized_ret,
+            "frontier_ret": offered,
+            "shortfall": offered - realized_ret if inside else np.nan,
+        }
+    pd.DataFrame(points).T.to_csv(out / "frontier_shortfall.csv")
+
     plt = _plt()
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.plot(
@@ -330,6 +371,12 @@ def main(argv: list[str] | None = None) -> None:
     raw = run_all(closes, cfg, "raw")
     start = next(iter(raw.values())).net_returns.index[0]
     spy_returns, spy = spy_stats(spy_closes, start)
+    spy.to_csv(args.output / "benchmark_stats.csv", header=["SPY"])
+    print(
+        f"backtest window {start.date()} .. {spy_returns.index[-1].date()}, "
+        f"{len(next(iter(raw.values())).net_returns)} trading days",
+        flush=True,
+    )
 
     write_tables(raw, args.output, "", benchmark=spy_returns)
     plot_equity(
