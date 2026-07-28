@@ -40,15 +40,15 @@ where $\text{rank}_i$ is tie-averaged (worst=1) for non-NaN assets $i$, and $n$ 
 - **Short-term reversal (st_rev)**
 The negative of the past 5-day return, cross-sectionally z-scored and clipped:
 
-$$\text{st\_rev}_{i,t} = \operatorname{clip}\!\left(
-\frac{-r_{i,\,t-1,\,5} - \operatorname{mean}_j(-r_{j,\,t-1,\,5})}
-{\operatorname{std}_j(-r_{j,\,t-1,\,5})},\; -L,\; +L \right),$$
+$$\text{st-rev}_{i,t} = \mathrm{clip}\!\left(
+\frac{-r_{i,\,t-1,\,5} - \mathrm{mean}_j(-r_{j,\,t-1,\,5})}
+{\mathrm{std}_j(-r_{j,\,t-1,\,5})},\; -L,\; +L \right),$$
 
 where $r_{i,t-1,5}$ is the trailing 5-day return ending at the $t-1$ close and the mean and standard deviation run across assets $j$ on day $t$. Fast mean-reversion, measured relative to the cross-section rather than to the asset's own history, another relative channel, mean-zero up to the clip.
 
 - **Differential combine**
 
-$$s_{i,t} = \tfrac{1}{3}\big(\operatorname{clip}(\text{tsmom}_{i,t}, -L, +L) + a \cdot \text{xsmom}_{i,t} + \text{st\_rev}_{i,t}\big),$$
+$$s_{i,t} = \tfrac{1}{3}\big(\mathrm{clip}(\text{tsmom}_{i,t}, -L, +L) + a \cdot \text{xsmom}_{i,t} + \text{st-rev}_{i,t}\big),$$
 per day, with no NaN-skipping — a missing component poisons the composite for that asset-day (conservative: no data, no position). The design is deliberately differential: tsmom carries the absolute level, the other two are mean-zero relative overlays, so the composite's net tilt comes from tsmom alone.
 
 $L$ (`clip`) and $a$ (`xsmom_scale`) share the default 2.0 but are separate parameters: $L$ is a blowout guard on an unbounded score, $a$ is a scale-matching factor on a score already bounded to $[-1, 1]$. Tuning one must never move the other.
@@ -61,9 +61,9 @@ $L$ (`clip`) and $a$ (`xsmom_scale`) share the default 2.0 but are separate para
 
 Ages the caller-supplied PIT window with exponentially decaying weights
 
-$$w_s \propto 0.5^{\,(T-s)/h}, \qquad h = \texttt{ewma\_halflife\_days},$$
+$$w_s \propto 0.5^{\,(T-s)/h},$$
 
-so an observation $h$ days older carries half the weight. With the weighted mean $\bar x = \sum_s w_s x_s / \sum_s w_s$ and demeaned rows $d_s = x_s - \bar x$,
+where $h$ is the halflife in days (`ewma_halflife_days`), so an observation $h$ days older carries half the weight. With the weighted mean $\bar x = \sum_s w_s x_s / \sum_s w_s$ and demeaned rows $d_s = x_s - \bar x$,
 
 $$\hat\Sigma^{\text{EWMA}} = \frac{\sum_s w_s\, d_s d_s^\top}{\text{denom}},
 \qquad
@@ -94,7 +94,7 @@ In code `r_bar = (corr.sum() - N) / (N*(N-1))`: summing the full matrix counts t
 #### Shrinkage intensity
 With
 
-$$\delta = \operatorname{clip}\!\left(\frac{\kappa}{T},\, 0,\, 1\right), \qquad
+$$\delta = \mathrm{clip}\!\left(\frac{\kappa}{T},\, 0,\, 1\right), \qquad
 \kappa = \frac{\hat\pi - \hat\rho}{\hat\gamma},$$
 
 the three ingredients are:
@@ -107,9 +107,9 @@ Expanding the square and using $\tfrac{1}{T}\sum_t d_{ti} d_{tj} = s_{ij}$ colla
 $$\hat\pi_{\text{mat}} = (D^{\circ 2})^\top (D^{\circ 2})/T - S \circ S$$
 (with $D^{\circ 2}$ the elementwise square and $\circ$ the Hadamard product), summed over all $(i, j)$.
 
-- $\hat\rho$ — asymptotic covariance between sample and target. Diagonal terms have $f_{ii} = s_{ii}$, contributing $\operatorname{tr}(\hat\pi_{\text{mat}})$; off-diagonal terms chain through the two $\sqrt{\cdot}$ factors of $f_{ij}$:
+- $\hat\rho$ — asymptotic covariance between sample and target. Diagonal terms have $f_{ii} = s_{ii}$, contributing $\mathrm{tr}(\hat\pi_{\text{mat}})$; off-diagonal terms chain through the two $\sqrt{\cdot}$ factors of $f_{ij}$:
 
-$$\hat\rho = \operatorname{tr}(\hat\pi_{\text{mat}})
+$$\hat\rho = \mathrm{tr}(\hat\pi_{\text{mat}})
 + \frac{\bar r}{2} \sum_{i \neq j}
 \left( \sqrt{\tfrac{s_{jj}}{s_{ii}}}\, \vartheta_{ii,ij}
 + \sqrt{\tfrac{s_{ii}}{s_{jj}}}\, \vartheta_{jj,ij} \right),
@@ -118,7 +118,7 @@ $$
 $$\vartheta_{ii,ij} = \frac{1}{T} \sum_{t}
 \big(d_{ti}^2 - s_{ii}\big)\big(d_{ti} d_{tj} - s_{ij}\big),
 $$
-vectorized as $\theta = (D^{\circ 2} \circ D)^\top D / T - \operatorname{diag}(S)\, S$; its transpose supplies $\vartheta_{jj,ij}$.
+vectorized as $\theta = (D^{\circ 2} \circ D)^\top D / T - \mathrm{diag}(S)\, S$; its transpose supplies $\vartheta_{jj,ij}$.
 
 - $\hat\gamma$ — squared Frobenius distance between target and sample, i.e. how far the target is from the data:
 
@@ -170,7 +170,7 @@ $$\nabla f = 2 \left[ g \circ m + \Sigma (g \circ w) - \frac{2}{n} m \sum_i g_i 
 
 using $\Sigma$'s symmetry for the middle term. Implementation details:
 
-- **Scale normalization.** ERC weights are invariant to $\Sigma \to c\Sigma$, so $\Sigma$ is scaled to $\operatorname{tr} = n$ internally. On raw daily covariances ($\sim 10^{-4}$) the objective sits around $10^{-8}$ and its improvements are smaller still, close enough to the solver's convergence tolerance that SLSQP can stop on a step that is numerically meaningless rather than on a genuine optimum. Rescaling puts $f$ at $O(1)$, where the convergence test measures real progress. The contract is re-verified on the *unscaled* $\Sigma$.
+- **Scale normalization.** ERC weights are invariant to $\Sigma \to c\Sigma$, so $\Sigma$ is scaled to $\mathrm{tr} = n$ internally. On raw daily covariances ($\sim 10^{-4}$) the objective sits around $10^{-8}$ and its improvements are smaller still, close enough to the solver's convergence tolerance that SLSQP can stop on a step that is numerically meaningless rather than on a genuine optimum. Rescaling puts $f$ at $O(1)$, where the convergence test measures real progress. The contract is re-verified on the *unscaled* $\Sigma$.
 - **Two failure gates.** SLSQP's `success` flag is the solver's self-report. The returned weights are additionally verified against the definition,
 
   $$\max_i \left| \frac{w_i (\Sigma w)_i}{w^\top \Sigma w} - \frac{1}{n} \right| \le 10^{-4}.$$
@@ -275,14 +275,14 @@ Turnover is measured against the *drifted* book $\tilde w_t$ and, when a no-trad
 Reporting conventions: 252 trading days per year, zero risk-free rate, one-way turnover as the engine measures it. With $T$ daily net returns $r_t$ and years $= T/252$:
 
 $$\text{CAGR} = \Big(\prod_t (1+r_t)\Big)^{1/\text{years}} - 1, \qquad
-\text{vol} = \operatorname{std}(r)\sqrt{252}, \qquad
-\text{Sharpe} = \frac{\bar r}{\operatorname{std}(r)}\sqrt{252}.$$
+\text{vol} = \mathrm{std}(r)\sqrt{252}, \qquad
+\text{Sharpe} = \frac{\bar r}{\mathrm{std}(r)}\sqrt{252}.$$
 
-Sortino replaces the denominator with the downside deviation about a zero target, $\sqrt{\tfrac{1}{T}\sum_t \min(r_t, 0)^2}$; Calmar is CAGR over $|\text{MaxDD}|$; MaxDD (maximum drawdown) is the most negative value of $\text{equity}/\operatorname{cummax}(\text{equity}) - 1$; cost drag is the annualized sum of charged costs, in return units. Sharpe and Sortino guard against a zero denominator: a constant return series has no volatility and no defined ratio, so the statistic is NaN rather than an arbitrarily large number produced by floating-point noise.
+Sortino replaces the denominator with the downside deviation about a zero target, $\sqrt{\tfrac{1}{T}\sum_t \min(r_t, 0)^2}$; Calmar is CAGR over $|\text{MaxDD}|$; MaxDD (maximum drawdown) is the most negative value of $\text{equity}/\mathrm{cummax}(\text{equity}) - 1$; cost drag is the annualized sum of charged costs, in return units. Sharpe and Sortino guard against a zero denominator: a constant return series has no volatility and no defined ratio, so the statistic is NaN rather than an arbitrarily large number produced by floating-point noise.
 
 **Market beta.** Against a benchmark return series $r_b$ (SPY buy-and-hold over the same window), measured on the overlapping dates:
 
-$$\beta = \frac{\operatorname{Cov}(r, r_b)}{\operatorname{Var}(r_b)}.$$
+$$\beta = \frac{\mathrm{Cov}(r, r_b)}{\mathrm{Var}(r_b)}.$$
 
 Beta is what makes raw equity curves interpretable. Over a single equity bull decade, terminal wealth ranks by market exposure rather than by construction quality, and volatility is not a substitute for beta — the same 10% volatility can be entirely market risk or none of it. The core statistics stay benchmark-free so a comparison table is always computable; beta is an opt-in column.
 
