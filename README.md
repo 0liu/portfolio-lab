@@ -33,7 +33,8 @@ This is a research library rather than an application, so there is no single `ma
 
    Useful flags: `--quick` (small lambda grid, weekly sweep only), `--output DIR`.
 
-2. Interactive research — the primary use
+2. Interactive research — the primary use. Walked through end to end in the [research notebook](notebooks/research_walkthrough.ipynb) (`uv sync --extra notebook` for a kernel).
+
    ```python
    from portlab.attribution import comparison_table
    from portlab.config import Config
@@ -51,6 +52,16 @@ This is a research library rather than an application, so there is no single `ma
    ```bash
    uv run --extra refresh python -m portlab.data --refresh
    ```
+
+## Documentation
+
+- **[docs/methodology.md](docs/methodology.md)** — the derivations: the point-in-time contract,
+  Ledoit-Wolf shrinkage worked through from the paper, the ERC gradient, and the engine's timeline
+  and accounting identities.
+- **[notebooks/research_walkthrough.ipynb](notebooks/research_walkthrough.ipynb)** — the library
+  used interactively: the signals taken apart layer by layer, a single rebalance opened up, and
+  three experiments the exhibits do not cover.
+- **[docs/exhibits/](docs/exhibits/)** — every table and figure, each with the CSV behind it.
 
 ## Results
 
@@ -223,6 +234,8 @@ portlab/
   attribution.py    Performance stats, MCR/CCR decomposition, beta, lambda sweep, frontier
 scripts/
   make_exhibits.py  Regenerates every table and figure from the committed cache
+notebooks/
+  research_walkthrough.ipynb  The library used interactively, end to end
 tests/              Signals, estimation, construction, engine, accounting, attribution tests
 data/ohlcv/         Committed daily-bars parquet cache, one file per ticker
 docs/
@@ -236,17 +249,14 @@ docs/
 - **One sample path**: a single decade, dominated by a US-equity bull market and a fixed, hindsight-selected universe of currently-liquid ETFs. Survivorship at the universe level.
 - **No hyperparameter search was run**: every parameter is a conventional default frozen a priori. Results are not overfit — and also not tuned.
 - **Sharpe and Sortino use rf = 0.** US cash yielded 4-5% through the back half of the sample, so every risk-adjusted figure here is flattered; ERC's 4.26% native CAGR is roughly cash-equivalent over that stretch. The vol-targeted table is the fairer read, and a proper excess-return treatment would reorder the low-volatility books.
-- **The signal layer is only exercised through the MVO family.** Equal weight, inverse-vol, and ERC ignore μ entirely, so three of the five optimizers say nothing about signal quality — and the two that do consume μ are the cost-damaged ones. These results do not cleanly separate signal quality from optimizer sensitivity to estimation error.
+- **`run_backtest` cannot take an externally supplied μ.** It always builds expected returns internally from `cfg.signals`, and no config setting can switch a single component off. Ablating one signal therefore needs a runtime patch rather than a config variant — a missing argument, not a missing capability, and the [notebook](notebooks/research_walkthrough.ipynb) shows the two-line fix.
+- **The signal layer is only exercised through the MVO family**. Equal weight, inverse-vol, and ERC ignore μ entirely, so three of the five optimizers say nothing about signal quality — and the two that do consume μ are the cost-damaged ones. These results do not cleanly separate signal quality from optimizer sensitivity to estimation error. The notebook pushes on this: ablating each component shows that dropping the short-term reversal signal improves net Sharpe by 0.076 while cutting turnover 62%, so as seen through the MVO objective the composite carries a component that only pays costs — though whether the signal is uninformative or merely unusable by this optimizer would need a test that bypasses construction entirely.
 - **The λ grid does not bracket the optimum**: net Sharpe is still rising at the largest penalty tested (3e-3) on all four legs, so the cost-optimal penalty lies outside the sweep and the reported gains are a lower bound.
 - **Vol targeting is approximate**: the overlay scales by predicted volatility from the EWMA model, and realized volatility lands between 8.06% and 11.17% against a 10% target. For ERC the 2.0 gross cap binds before the target is reachable.
 - **Beta is a single full-sample estimate** against SPY, with no rolling window, no up/down decomposition, and no separation of market exposure from the other factors driving these asset classes.
 - **The efficient frontier is in-sample**: built from full-sample moments and not achievable in real time. It bounds the estimation-error gap from a reference the backtest could never have traded, and it does not extend to MVO-LS's realized volatility.
-- **Ledoit-Wolf and EWMA don't compose**: the shrinkage intensity is derived under i.i.d. equal weighting, so the config offers them as alternatives, not a combination.
+- **Ledoit-Wolf and EWMA don't compose**: the shrinkage intensity is derived under i.i.d. equal weighting, so the config offers them as alternatives, not a combination. Measured in the [notebook](notebooks/research_walkthrough.ipynb), that restriction turns out to cost nothing: on the minimum-variance book EWMA matches or beats the shrinkage estimator at every window length tested, so the estimator that cannot be combined with shrinkage is the one that wins anyway. At daily frequency the binding constraint is non-stationarity, not estimation noise.
 - **ERC numerical precision** on the real 19-asset covariance is ~5e-5 in the worst regime (late 2020), driven by the collinear duration and credit sleeves; the acceptance tolerance is set at 1e-4 from measurement. Hierarchical risk parity would sidestep the ill-conditioning.
-
-## Roadmap
-
-Hierarchical risk parity, Black-Litterman views, a rebalance-frequency study beyond daily/weekly, and per-signal return attribution.
 
 ## License
 
