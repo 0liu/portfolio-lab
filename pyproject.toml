@@ -29,6 +29,10 @@ exhibits = [
     "matplotlib>=3.11.1",
     "tabulate>=0.10.0",
 ]
+notebook = [
+    "jupyterlab>=4.6.2",
+    "matplotlib>=3.11.1",
+]
 
 [dependency-groups]
 dev = [
