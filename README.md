@@ -1,5 +1,7 @@
 # portlab — Multi-Signal Portfolio Construction Lab
 
+[![CI](https://github.com/0liu/portfolio-lab/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/0liu/portfolio-lab/actions/workflows/ci.yml)
+
 A daily-rebalancing, long-short-capable, multi-signal portfolio construction platform on cross-asset ETFs, with a walk-forward backtest engine and risk attribution.
 
 ## Scope
